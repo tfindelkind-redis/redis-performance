@@ -1,0 +1,31 @@
+# Redis Database Configuration Template
+# Copy this file to config.sh and fill in your actual values
+# Azure Managed Redis Database Details
+
+# Redis host (e.g., yourredis.redis.cache.windows.net)
+REDIS_HOST=""
+
+# Redis port (default: 6380 for SSL, 6379 for non-SSL)
+REDIS_PORT="6380"
+
+# Redis access key
+REDIS_PASSWORD=""
+
+# Use SSL/TLS (true/false)
+USE_SSL="true"
+
+# Database number (default: 0)
+REDIS_DB="0"
+
+# Azure Configuration (for deploy-to-aci.sh)
+# Resource group name for Azure Container deployment
+AZURE_RESOURCE_GROUP=""
+
+# Azure region/location (e.g., eastus, westus, westeurope)
+AZURE_LOCATION="westus3"
+
+# Azure Container Registry name (leave empty for default: redis-benchmark-acr)
+ACR_NAME="acr-tfindelkind"
+
+# Azure Container Instance name (leave empty for default: redis-benchmark-aci)
+CONTAINER_NAME="tfindelkind-perf"

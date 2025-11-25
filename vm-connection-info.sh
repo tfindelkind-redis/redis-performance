@@ -1,0 +1,8 @@
+VM_IP="20.171.42.83"
+VM_NAME="redis-benchmark-vm"
+ADMIN_USER="azureuser"
+AZURE_RESOURCE_GROUP="rg-azure-managed-redis-terraform3"
+NIC_NAME="redis-benchmark-vmVMNic"
+NSG_NAME="redis-benchmark-vmNSG"
+PUBLIC_IP_NAME=""
+DISK_NAME="redis-benchmark-vm_OsDisk_1_7e55c85cfa244dbd83c2574573fe32dd"
