@@ -67,7 +67,7 @@ else:
     ssl=os.environ.get("USE_SSL", "false").lower() == "true"
   )
 for i in range(1, 1201):
-  key = f"key:{i:012d}"
+  key = f"key:{i}"
   r.set(key, os.urandom(1048576))
   if (i-1) % 100 == 0:
     print(f"  Populated {i} / 1200 keys...")
@@ -77,37 +77,55 @@ echo "✅ All 1,200 keys populated."
 echo ""
 
 
-# Verify key count
-echo "Verifying key count..."
-if [ "${REDIS_CLUSTER_MODE:-false}" = "true" ]; then
-  # Sum DBSIZE across all master nodes in the cluster
-  TOTAL=0
-  # Get all master node host:port pairs
-  NODES=$(redis-cli -c -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" --tls --insecure CLUSTER NODES | awk '$3 ~ /master/ {print $2}' | cut -d@ -f1)
-  for NODE in $NODES; do
-    HOST=$(echo $NODE | cut -d: -f1)
-    PORT=$(echo $NODE | cut -d: -f2)
-    COUNT=$(redis-cli -h "$HOST" -p "$PORT" -a "$REDIS_PASSWORD" --tls --insecure DBSIZE 2>/dev/null || echo 0)
-    echo "  $HOST:$PORT has $COUNT keys"
-    TOTAL=$((TOTAL + COUNT))
-  done
-  KEY_COUNT=$TOTAL
-else
-  KEY_COUNT=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" --tls --insecure DBSIZE)
-fi
-echo "Keys in database: $KEY_COUNT"
-if [ "$KEY_COUNT" -lt 1200 ]; then
-  echo "⚠️  Warning: Expected 1,200 keys but found $KEY_COUNT"
-  echo "Continuing anyway..."
-fi
 
 echo "Waiting 5 seconds before starting read test..."
 sleep 5
 
 # Prepare results directory and filename
+
 RESULTS_DIR="results"
 mkdir -p "$RESULTS_DIR"
 RESULT_FILE="$RESULTS_DIR/memtier-$(date +%Y%m%d-%H%M%S).out"
+
+# Write workload and environment info to results file
+{
+  echo "# Redis Performance Test Run Info"
+  echo "Date: $(date -u)"
+  echo "Redis Host: $REDIS_HOST"
+  echo "Redis Port: $REDIS_PORT"
+  echo "Redis DB: $REDIS_DB"
+  echo "Cluster Mode: $REDIS_CLUSTER_MODE"
+  echo "Key Range: 1-1200"
+  echo "Key Prefix: key:"
+  echo "Workload: GET only, 1MB values, 1200 keys"
+  echo "Memtier Profile: profiles/read-1mb-200clients.profile"
+  echo "Memtier Flags: $MEMTIER_FLAGS"
+  echo ""
+  echo "# Azure/VM/Redis Instance Info"
+  echo "Resource Group: $AZURE_RESOURCE_GROUP"
+  echo "Location: $AZURE_LOCATION"
+  echo "VM Name: $VM_NAME"
+  echo "Admin User: $ADMIN_USER"
+  echo ""
+  # Try to get Redis SKU and cluster policy if az CLI is available
+  if command -v az >/dev/null 2>&1; then
+    echo "Redis SKU: $(az redis show --name $(basename $REDIS_HOST .redis.azure.net) --resource-group $AZURE_RESOURCE_GROUP --query sku.name -o tsv 2>/dev/null)"
+    echo "Redis Capacity: $(az redis show --name $(basename $REDIS_HOST .redis.azure.net) --resource-group $AZURE_RESOURCE_GROUP --query sku.capacity -o tsv 2>/dev/null)"
+    echo "Cluster Policy: $(az redis show --name $(basename $REDIS_HOST .redis.azure.net) --resource-group $AZURE_RESOURCE_GROUP --query redisConfiguration.cluster-policy -o tsv 2>/dev/null)"
+  else
+    echo "Redis SKU: (az CLI not available)"
+    echo "Cluster Policy: (az CLI not available)"
+  fi
+  echo ""
+} > "$RESULT_FILE"
+
+# Show detailed shard/slot/key distribution using Python script (after results file is created)
+if [ "${REDIS_CLUSTER_MODE:-false}" = "true" ]; then
+  echo "Shard/slot/key distribution (from check-shard-slots.py):"
+  ${VENV_PY} check-shard-slots.py | tee -a "$RESULT_FILE"
+else
+  echo "Slot-level key distribution is only available for OSS Redis Cluster. Skipping for Enterprise."
+fi
 
 # Step 2: Read performance test
 echo ""
@@ -117,16 +135,11 @@ echo "=========================================="
 echo "Running 24.6 million GET operations (no nulls expected)..."
 
 # Remove -t get, -r <value>, and -d <value> from PROFILE_FLAGS for memtier_benchmark
-MEMTIER_FLAGS=$(awk 'BEGIN{skip=0} !/^#/ && NF {if($1=="-t"||$1=="-r"||$1=="-d"||$1=="-n"){skip=1;next} if(skip){skip=0;next} printf "%s ", $0}' profiles/read-1mb-200clients.profile)
-if [ "${REDIS_CLUSTER_MODE:-false}" = "true" ]; then
-  # Cluster mode: use --cluster-mode and key range
-  echo "Running: memtier_benchmark --cluster-mode --tls --tls-skip-verify --authenticate $REDIS_PASSWORD --server $REDIS_HOST --port $REDIS_PORT --key-minimum=1 --key-maximum=1200 --key-prefix=key: --ratio=0:1 --test-time=600 $MEMTIER_FLAGS | tee $RESULT_FILE"
-  eval memtier_benchmark --cluster-mode --tls --tls-skip-verify --authenticate "$REDIS_PASSWORD" --server "$REDIS_HOST" --port "$REDIS_PORT" --key-minimum=1 --key-maximum=1200 --key-prefix=key: --ratio=0:1 --test-time=600 $MEMTIER_FLAGS | tee "$RESULT_FILE"
-else
-  # Standalone/Enterprise: no --cluster-mode, but use same key range and GET-only workload
-  echo "Running: memtier_benchmark --tls --tls-skip-verify --authenticate $REDIS_PASSWORD --server $REDIS_HOST --port $REDIS_PORT --key-minimum=1 --key-maximum=1200 --key-prefix=key: --ratio=0:1 --test-time=600 $MEMTIER_FLAGS | tee $RESULT_FILE"
-  eval memtier_benchmark --tls --tls-skip-verify --authenticate "$REDIS_PASSWORD" --server "$REDIS_HOST" --port "$REDIS_PORT" --key-minimum=1 --key-maximum=1200 --key-prefix=key: --ratio=0:1 --test-time=600 $MEMTIER_FLAGS | tee "$RESULT_FILE"
-fi
+# Source memtier_benchmark config (shell fragment)
+source profiles/read-1mb-200clients.profile
+
+echo "Running: memtier_benchmark $MEMTIER_FLAGS | tee $RESULT_FILE"
+eval memtier_benchmark $MEMTIER_FLAGS | tee "$RESULT_FILE"
 
 echo ""
 echo "=========================================="
